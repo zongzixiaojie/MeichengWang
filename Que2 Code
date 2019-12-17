@@ -1,0 +1,91 @@
+from __future__ import print_function
+from pyspark.sql import SparkSession
+import sys
+import numpy
+from pyspark.sql.types import Row
+from pyspark.sql.functions import *
+from pyspark.sql.functions import lit
+import pandas as pd
+from pyspark.ml.feature import VectorAssembler, ChiSqSelector
+from pyspark.ml.linalg import Vectors
+from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.feature import VectorAssembler
+from pyspark.sql.types import *
+from pyspark.sql import functions
+
+
+if __name__ == "__main__":
+    spark = SparkSession\
+        .builder\
+        .appName("p2q2")\
+        .getOrCreate()
+
+
+        spark= SparkSession.builder.appName('heart disease').getOrCreate()
+        raw_data=spark.read.csv(sys.argv[1],header=True)
+        ## change the datastype and drop 'education' column
+        raw_data=raw_data.select(raw_data.cigsPerDay.cast("float"),
+                        raw_data.BPMeds.cast("float"),
+                        raw_data.totChol.cast("float"),
+                        raw_data.sysBP.cast("float"),
+                                  raw_data.diaBP.cast("float"),
+                                  raw_data.BMI.cast("float"),
+                                  raw_data.heartRate.cast("float"),
+                                  raw_data.glucose.cast("float"),
+                        raw_data.male.cast("integer"),
+                       raw_data.age.cast("integer"),
+                       raw_data.currentSmoker.cast("integer"),
+                        raw_data.prevalentStroke.cast("integer"),
+                       raw_data.prevalentHyp.cast("integer"),
+                       raw_data.diabetes.cast("integer"),
+                       raw_data.TenYearCHD.cast("integer"))
+
+        raw_data = raw_data.withColumnRenamed("male", "Sex_male")
+        raw_data = raw_data.withColumn('const', lit(1))
+        
+        ## drop the rows with null value 
+        raw_data=raw_data.dropna()
+        train_data = raw_data.drop('TenYearCHD')
+        ## vector features
+        cols=train_data.columns
+        Assembler = VectorAssembler(inputCols=cols, outputCol="features")
+        train_A=Assembler.transform(raw_data)
+        train_A.show(10,truncate=False)
+        
+        ##feature selection fpr>0.05
+        css= ChiSqSelector(featuresCol='features',outputCol='select_varibles',labelCol='TenYearCHD',fpr=0.05)
+        New_varibles=css.fit(train_A).transform(train_A)
+        New_varibles.show(5,truncate=False)
+        
+        ##train,test split and train the model 
+        train, test = New_varibles.randomSplit([0.8, 0.2])
+        param= LogisticRegression(featuresCol="select_varibles", labelCol='TenYearCHD', regParam=0.01,maxIter=50)
+        Model=param.fit(train)
+        transformed_Model=Model.transform(test)
+        result = transformed_Model.toPandas()
+        pred_result = result['prediction']
+        test_result= result['TenYearCHD']
+
+        ## built confusion_matrix
+        confusion_matrix = pd.crosstab(pred_result, test_result)
+        TN = confusion_matrix[0][0]
+        FN = confusion_matrix[0][1]
+        FP = confusion_matrix[1][0]
+        TP = confusion_matrix[1][1]
+        sensitivity=TP/float(TP+FN)
+        specificity=TN/float(TN+FP)
+        print('The acuuracy of the model = TP+TN/(TP+TN+FP+FN) = ',(TP+TN)/float(TP+TN+FP+FN),'\n',
+
+            'The Missclassification = 1-Accuracy = ',1-((TP+TN)/float(TP+TN+FP+FN)),'\n',
+
+            'Sensitivity or True Positive Rate = TP/(TP+FN) = ',TP/float(TP+FN),'\n',
+
+            'Specificity or True Negative Rate = TN/(TN+FP) = ',TN/float(TN+FP),'\n',
+
+            'Positive Predictive value = TP/(TP+FP) = ',TP/float(TP+FP),'\n',
+
+            'Negative predictive Value = TN/(TN+FN) = ',TN/float(TN+FN),'\n',
+
+            'Positive Likelihood Ratio = Sensitivity/(1-Specificity) = ',sensitivity/(1-specificity),'\n',
+
+            'Negative likelihood Ratio = (1-Sensitivity)/Specificity = ',(1-sensitivity)/specificity)
